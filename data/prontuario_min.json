@@ -1,0 +1,5 @@
+[
+  { "nivel":"Secundaria", "grado":"3ro", "area":"Lenguaje", "tema":"Comprensión lectora", "descripcion":"Estrategias para interpretar textos y construir significado." },
+  { "nivel":"Secundaria", "grado":"3ro", "area":"Biología", "tema":"Ecosistemas", "descripcion":"Relaciones bióticas/abióticas y cadenas tróficas." },
+  { "nivel":"Primaria", "grado":"6to", "area":"Matemática", "tema":"Fracciones", "descripcion":"Operaciones básicas y representación en contextos cotidianos." }
+]
