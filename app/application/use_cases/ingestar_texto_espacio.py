@@ -1,5 +1,17 @@
+# app/application/use_cases/ingesta_texto_espacio.py
+
+# NOTA: Este use case corresponde a una versión inicial del flujo de ingesta de
+# material en espacios mediante texto directo. Posteriormente fue reemplazado
+# por la ingesta de archivos (PDF/DOCX), que es el flujo actualmente utilizado.
+
+# Se conserva como referencia histórica del primer pipeline de chunking +
+# embeddings del sistema.
+
 from fastapi import HTTPException
 
+# Función auxiliar que divide un texto largo en fragmentos (chunks) de tamaño
+# controlado con un pequeño solapamiento entre ellos. Estos fragmentos son los
+# que luego se vectorizan para crear embeddings usados en búsquedas semánticas.
 def chunk_text(text: str, size: int, overlap: int) -> list[str]:
     text = text.strip()
     if len(text) <= size:
@@ -13,6 +25,7 @@ def chunk_text(text: str, size: int, overlap: int) -> list[str]:
             chunks.append(chunk)
         i += step
     return chunks
+
 
 class IngestarTextoEspacioUseCase:
     def __init__(self, auth_client, espacios_repo, textos_repo, embeddings_repo, embeddings_model):

@@ -1,3 +1,10 @@
+# app/application/use_cases/send_message.py
+
+# NOTA: Este use case corresponde a una versión anterior y simplificada del flujo
+# de CHAT GENERAL. Guarda el mensaje del usuario y devuelve una respuesta mock
+# del assistant sin usar RAG, LLM ni RED3. Fue reemplazado por
+# `EnviarMensajeConRecomendacionesUseCase`, pero se conserva como referencia y para hacer pruebas.
+
 class SendMessageUseCase:
     def __init__(self, auth_client, repo):
         self.auth_client = auth_client

@@ -1,3 +1,9 @@
+# app/application/use_cases/get_chat_history.py
+
+# Use case del flujo de CHAT GENERAL encargado de recuperar una conversación
+# existente junto con todos sus mensajes. Primero valida que el chat exista y
+# luego consulta su historial completo en el repositorio.
+
 class GetChatHistoryUseCase:
     def __init__(self, repo):
         self.repo = repo

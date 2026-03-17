@@ -1,4 +1,11 @@
 # app/application/use_cases/crear_chat_espacio.py
+
+# Este use case pertenece al flujo de ESPACIOS DE TRABAJO y se encarga de crear
+# una conversación dentro de un espacio específico. Primero identifica al docente
+# autenticado, luego valida que el espacio exista y sea accesible para ese usuario,
+# y finalmente delega al repositorio de chats la creación de la conversación
+# asociada a ese espacio.
+
 class CrearChatEspacioUseCase:
     def __init__(self, auth_client, espacios_repo, chat_espacios_repo):
         self.auth_client = auth_client

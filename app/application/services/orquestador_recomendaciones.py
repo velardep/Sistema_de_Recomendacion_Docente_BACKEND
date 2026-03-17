@@ -1,9 +1,16 @@
-from __future__ import annotations
+# app/application/services/orquestador_recomendaciones.py
 
+# Servicio de aplicación del flujo de CHAT GENERAL encargado de recuperar
+# contenido relevante desde el prontuario mediante embeddings, convertirlo
+# en recomendaciones persistidas en base de datos y devolver también los
+# chunks que el LLM usará como contexto.
+
+from __future__ import annotations
 from typing import Any, Tuple, List
 
-
-# app/application/services/orquestador_recomendaciones.py
+# Este servicio orquesta la recuperación de recursos desde prontuario y su
+# conversión a recomendaciones almacenadas, dejando el use case del chat
+# más limpio y enfocado en el flujo conversacional.
 class OrquestadorRecomendaciones:
     def __init__(self, embeddings_model, busqueda_rpc, recomendacion_repo):
         self.embeddings_model = embeddings_model
@@ -20,6 +27,8 @@ class OrquestadorRecomendaciones:
         consulta: str,
         top_k: int = 3,
     ):
+        # Ejecuta la recomendación desde prontuario y reutiliza el contenido de esas
+        # recomendaciones como contexto textual para el LLM.
         recomendaciones = await self.recomendar_desde_prontuario(
             access_token=access_token,
             docente_id=docente_id,
@@ -29,7 +38,6 @@ class OrquestadorRecomendaciones:
             top_k=top_k,
         )
 
-        # chunks = textos que el LLM verá como contexto
         chunks = [r.get("contenido", "") for r in recomendaciones]
         return recomendaciones, chunks
 
@@ -42,8 +50,12 @@ class OrquestadorRecomendaciones:
         consulta: str,
         top_k: int = 3,
     ):
+        # Genera el embedding de la consulta para buscar recursos semánticamente
+        # relacionados dentro del prontuario.
         vec = self.embeddings_model.embed(consulta)
 
+        # Consulta el prontuario global mediante búsqueda semántica para recuperar
+        # los fragmentos más cercanos a la consulta del docente.
         resultados = await self.busqueda_rpc.buscar(
             access_token=access_token,
             query_vec=vec,
@@ -53,6 +65,9 @@ class OrquestadorRecomendaciones:
             docente_id=docente_id,
         )
 
+        # Cada resultado recuperado se transforma en una recomendación persistida,
+        # de modo que quede trazabilidad entre el mensaje, el recurso sugerido y
+        # la conversación donde fue utilizado.
         recomendaciones = []
         for r in resultados:
             rec_payload = {

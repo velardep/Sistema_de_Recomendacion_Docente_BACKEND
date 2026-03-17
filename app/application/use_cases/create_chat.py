@@ -1,3 +1,9 @@
+# app/application/use_cases/create_chat.py
+
+# Use case del flujo de CHAT GENERAL. Se encarga de crear una nueva conversación
+# para el docente autenticado. Primero obtiene el usuario desde el access_token
+# y luego delega al repositorio la creación del chat con el título recibido.
+
 class CreateChatUseCase:
     def __init__(self, auth_client, repo):
         self.auth_client = auth_client

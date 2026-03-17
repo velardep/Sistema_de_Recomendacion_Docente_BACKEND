@@ -2,3 +2,10 @@
 __pycache__/
 *.pyc
 .env
+
+
+# modelos de redes neuronales
+*.pt
+app/infrastructure/ai/red1_model/
+app/infrastructure/ai/red2_model/
+app/infrastructure/ai/red3_model/

@@ -1,3 +1,10 @@
+# app/application/use_cases/get_chat_espacio_history.py
+
+# Este use case pertenece al flujo de ESPACIOS DE TRABAJO y se encarga de recuperar
+# una conversación de espacio junto con su historial de mensajes. Antes de devolver
+# los datos, valida que la conversación exista y que realmente pertenezca al espacio
+# solicitado para evitar cruces incorrectos entre conversaciones.
+
 class GetChatEspacioHistoryUseCase:
     def __init__(self, chat_espacios_repo):
         self.chat_espacios_repo = chat_espacios_repo
@@ -7,7 +14,6 @@ class GetChatEspacioHistoryUseCase:
         if not conv:
             return None
 
-        # extra guard: conv debe pertenecer al espacio solicitado
         if str(conv.get("espacio_id")) != str(espacio_id):
             return None
 

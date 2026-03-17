@@ -1,3 +1,10 @@
+# app/application/use_cases/buscar_semantico.py
+
+# Use case del flujo de BÚSQUEDA SEMÁNTICA del sistema. Recibe un texto de
+# consulta, genera su embedding vectorial y delega la búsqueda al RPC de
+# Supabase (pgvector) para recuperar fragmentos de contenido similares
+# almacenados previamente en la base de datos.
+
 class BuscarSemanticoUseCase:
     def __init__(self, auth_client, embeddings_model, rpc):
         self.auth_client = auth_client
@@ -5,10 +12,12 @@ class BuscarSemanticoUseCase:
         self.rpc = rpc
 
     async def execute(self, access_token: str, texto: str, top_k: int,
-                      tipo_fuente: str | None, espacio_id: str | None):
+        tipo_fuente: str | None, espacio_id: str | None):
         user = await self.auth_client.get_user(access_token)
         docente_id = user["id"]
 
+        # Convierte el texto de la consulta en un vector semántico que
+        # será usado para comparar similitud contra los embeddings almacenados.
         vec = self.embeddings_model.embed(texto)
         return await self.rpc.buscar(
             access_token=access_token,
