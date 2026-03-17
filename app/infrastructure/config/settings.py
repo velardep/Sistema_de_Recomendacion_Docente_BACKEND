@@ -26,6 +26,7 @@ class Settings(BaseSettings):
 
     # Directorios de exportación para modelos de IA
     RED1_EXPORT_DIR: str = str(BASE_DIR / "infrastructure" / "ai" / "red1_model")
+    RED2_EXPORT_DIR: str = str(BASE_DIR / "infrastructure" / "ai" / "red2_model")
     RED3_EXPORT_DIR: str = str(BASE_DIR / "infrastructure" / "ai" / "red3_model")
 
     # Flags para habilitar/deshabilitar funcionalidades del PDC
