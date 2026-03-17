@@ -48,10 +48,9 @@ logging.getLogger("httpx").setLevel(logging.INFO)
 # Crear UNA sola app (con title/version desde el inicio)
 app = FastAPI(title="API Taller", version="0.1.0")
 
-# En el evento de startup, aseguramos que los modelos de IA estén descargados y listos para usar
-@app.on_event("startup")
-async def startup_models():
-    ensure_models_downloaded()
+# Asegurarse de que los modelos estén descargados al iniciar la app (antes de recibir requests)
+ensure_models_downloaded()
+
 
 # Handler global para cuando Supabase responde 4xx/5xx y httpx lanza HTTPStatusError
 @app.exception_handler(httpx.HTTPStatusError)
