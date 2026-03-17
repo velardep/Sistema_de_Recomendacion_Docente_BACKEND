@@ -38,6 +38,17 @@ class Settings(BaseSettings):
     PDC_LIBRARY_BUCKET: str = "pdc-library"
     ESPACIO_FILES_BUCKET: str = "espacio-files"
 
+    # R2
+    R2_ENDPOINT: str | None = None
+    R2_ACCESS_KEY_ID: str | None = None
+    R2_SECRET_ACCESS_KEY: str | None = None
+    R2_BUCKET: str | None = None
+    R2_MODELS_PREFIX: str = "models"
+
+    RED1_R2_PREFIX: str = "models/red1"
+    RED2_R2_PREFIX: str = "models/red2"
+    RED3_R2_PREFIX: str = "models/red3"
+
     model_config = {
         "env_file": ".env"
     }
