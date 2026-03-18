@@ -83,6 +83,8 @@ origins = [
     "http://127.0.0.1:5173",
     "http://localhost:3000",  # CRA
     "http://127.0.0.1:3000",
+    "https://frontend-sipre.velardep44.workers.dev",
+
     
 ]
 
