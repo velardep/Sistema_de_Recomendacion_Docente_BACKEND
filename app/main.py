@@ -84,8 +84,7 @@ origins = [
     "http://localhost:3000",  # CRA
     "http://127.0.0.1:3000",
     "https://frontend-sipre.velardep44.workers.dev",
-    "https://sistema-de-recomendacion-docente-frontend.pages.dev
-"
+    "https://sistema-de-recomendacion-docente-frontend.pages.dev"
 
     
 ]
