@@ -159,3 +159,10 @@ class Red3Service:
             await self.repo.upsert_style_profile(access_token, payload)
         except Exception:
             pass
+
+
+    async def get_style_profile_best_effort(self, access_token: str, docente_id: str):
+        try:
+            return await self.repo.get_style_profile(access_token, docente_id)
+        except Exception:
+            return None

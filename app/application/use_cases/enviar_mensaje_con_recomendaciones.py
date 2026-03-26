@@ -12,6 +12,10 @@ import unicodedata
 from app.domain.ports.outbound.llm_client import LLMClient
 from app.infrastructure.persistence.supabase.chat_repository_postgrest import is_generic_title
 
+from app.infrastructure.config.settings import settings
+
+DEMO_RED3 = settings.demo_red3
+
 # Palabras muy comunes o genéricas que se excluyen al intentar construir
 # automáticamente un título útil a partir del primer mensaje del usuario.
 STOPWORDS = {
@@ -114,6 +118,60 @@ def build_pretty_title_from_message(text: str) -> str:
     return title
 
 
+
+
+
+def _safe_prob(v) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return 0.0
+
+
+def _build_red3_soft_prompt(profile_row: dict | None) -> str:
+    if not profile_row:
+        return ""
+
+    probs = profile_row.get("style_probs") or {}
+    main = (profile_row.get("style_main") or "").strip()
+
+    ranked = []
+    if isinstance(probs, dict):
+        ranked = sorted(
+            [(str(k).strip(), _safe_prob(v)) for k, v in probs.items() if str(k).strip()],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+    if not ranked and not main:
+        return ""
+
+    top1_name = ranked[0][0] if ranked else main
+    top1_prob = ranked[0][1] if ranked else 0.0
+
+    top2_name = ranked[1][0] if len(ranked) > 1 else ""
+    top2_prob = ranked[1][1] if len(ranked) > 1 else 0.0
+
+    second_line = ""
+    if top2_name:
+        second_line = f"- Estilo secundario reciente: {top2_name} ({top2_prob:.3f}).\n"
+
+    return (
+        "CONTEXTO ADAPTATIVO RED3:\n"
+        f"- Estilo dominante reciente: {top1_name} ({top1_prob:.3f}).\n"
+        f"{second_line}"
+        "REGLAS DE USO:\n"
+        "- Cuando la solicitud sea ambigua, prioriza de forma visible el estilo dominante en la manera de explicar, estructurar y ejemplificar la respuesta.\n"
+        "- Usa el estilo secundario solo como apoyo complementario, no como eje principal.\n"
+        "- Si el docente pide explícitamente un enfoque teórico, práctico, evaluativo, reflexivo, tecnológico u otro, prioriza la solicitud actual por encima del perfil histórico.\n"
+        "- Mantén flexibilidad: adapta la respuesta al contexto actual y evita encasillar al docente en una sola forma de enseñanza.\n"
+        "- No menciones RED3, estilo, probabilidades ni perfil al usuario.\n"
+    )
+
+
+
+
+
 class EnviarMensajeConRecomendacionesUseCase:
     def __init__(
         self,
@@ -128,6 +186,24 @@ class EnviarMensajeConRecomendacionesUseCase:
         self.orquestador = orquestador
         self.llm = llm_client
         self.red3 = red3_service
+
+
+
+    async def _get_red3_prompt_context(self, access_token: str, docente_id: str) -> str:
+        if not self.red3:
+            return ""
+
+        try:
+            profile = await self.red3.get_style_profile_best_effort(
+                access_token=access_token,
+                docente_id=docente_id,
+            )
+            return _build_red3_soft_prompt(profile)
+        except Exception:
+            return ""
+
+
+
 
     async def execute(self, token: str, chat_id: str, content: str):
 
@@ -199,11 +275,58 @@ class EnviarMensajeConRecomendacionesUseCase:
         # Genera la respuesta final usando la consulta original, el historial del chat
         # y los chunks recuperados por el orquestador.
         # Gemini (LLM): usa primero chunks y si no alcanza usa INTERNET (grounding)
+        red3_ctx = await self._get_red3_prompt_context(token, docente_id)
+
+        prompt_final = content
+        if red3_ctx:
+            prompt_final = (
+                f"{red3_ctx}\n\n"
+                "Consulta actual del docente:\n"
+                f"{content}"
+            )
+
         respuesta = await self.llm.generate(
-            prompt=content,
+            prompt=prompt_final,
             context_chunks=chunks,
             history=history_fmt,
         )
+        print(">>> DEMO_RED3:", DEMO_RED3)
+        print(">>> RED3 SERVICE:", self.red3)
+        print(">>> ANTES DEMO RESPUESTA:", respuesta[:100])
+
+        # ===== DEMO RED3 Mostrar Styles =====
+        if DEMO_RED3 and self.red3:
+            try:
+                profile = await self.red3.get_style_profile_best_effort(
+                    access_token=token,
+                    docente_id=docente_id,
+                )
+
+                # 🔥 manejar lista
+                if isinstance(profile, list) and len(profile) > 0:
+                    profile = profile[0]
+
+                print(">>> PROFILE RAW:", profile)
+
+                if profile:
+                    probs = profile.get("style_probs") or {}
+                    main = profile.get("style_main", "")
+
+                    ranked = sorted(
+                        [(k, float(v)) for k, v in probs.items()],
+                        key=lambda x: x[1],
+                        reverse=True,
+                    )[:3]
+
+                    demo_text = " | ".join([f"{k}:{v:.2f}" for k, v in ranked])
+
+                    respuesta = (
+                        f"[RED3 → {main} | {demo_text}]\n\n"
+                        f"{respuesta}"
+                    )
+
+            except Exception as e:
+                print("ERROR RED3 DEMO:", e)
 
         # Persiste la respuesta del assistant junto con metadatos mínimos del uso de RAG.
         assistant_msg = await self.chat_repo.insert_message(

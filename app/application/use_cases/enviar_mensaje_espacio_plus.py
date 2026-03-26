@@ -13,6 +13,62 @@ from __future__ import annotations
 from app.domain.ports.outbound.llm_client import LLMClient
 from app.application.use_cases.enviar_mensaje_con_recomendaciones import build_pretty_title_from_message
 
+from app.infrastructure.config.settings import settings
+
+DEMO_RED3 = settings.demo_red3
+
+def _safe_prob(v) -> float:
+    try:
+        return float(v)
+    except Exception:
+        return 0.0
+
+
+def _build_red3_soft_prompt(profile_row: dict | None) -> str:
+    if not profile_row:
+        return ""
+
+    probs = profile_row.get("style_probs") or {}
+    main = (profile_row.get("style_main") or "").strip()
+
+    ranked = []
+    if isinstance(probs, dict):
+        ranked = sorted(
+            [(str(k).strip(), _safe_prob(v)) for k, v in probs.items() if str(k).strip()],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+    if not ranked and not main:
+        return ""
+
+    top1_name = ranked[0][0] if ranked else main
+    top1_prob = ranked[0][1] if ranked else 0.0
+
+    top2_name = ranked[1][0] if len(ranked) > 1 else ""
+    top2_prob = ranked[1][1] if len(ranked) > 1 else 0.0
+
+    second_line = ""
+    if top2_name:
+        second_line = f"- Estilo secundario reciente: {top2_name} ({top2_prob:.3f}).\n"
+
+    return (
+        "CONTEXTO ADAPTATIVO RED3:\n"
+        f"- Estilo dominante reciente: {top1_name} ({top1_prob:.3f}).\n"
+        f"{second_line}"
+        "REGLAS DE USO:\n"
+        "- Cuando la solicitud sea ambigua, prioriza de forma visible el estilo dominante en la manera de explicar, estructurar y ejemplificar la respuesta.\n"
+        "- Usa el estilo secundario solo como apoyo complementario, no como eje principal.\n"
+        "- Si el docente pide explícitamente un enfoque teórico, práctico, evaluativo, reflexivo, tecnológico u otro, prioriza la solicitud actual por encima del perfil histórico.\n"
+        "- Mantén flexibilidad: adapta la respuesta al contexto actual y evita encasillar al docente en una sola forma de enseñanza.\n"
+        "- No menciones RED3, estilo, probabilidades ni perfil al usuario.\n"
+    )
+
+
+
+
+
+
 
 class EnviarMensajeEspacioPlusUseCase:
     def __init__(
@@ -34,6 +90,22 @@ class EnviarMensajeEspacioPlusUseCase:
         self.red1 = red1_service
         self.red2_guidance = red2_guidance_service
         self.red3 = red3_service
+
+
+
+    async def _get_red3_prompt_context(self, access_token: str, docente_id: str) -> str:
+        if not self.red3:
+            return ""
+
+        try:
+            profile = await self.red3.get_style_profile_best_effort(
+                access_token=access_token,
+                docente_id=docente_id,
+            )
+            return _build_red3_soft_prompt(profile)
+        except Exception:
+            return ""
+
 
     async def execute(
         self,
@@ -165,14 +237,25 @@ class EnviarMensajeEspacioPlusUseCase:
 
         # La consulta original puede enriquecerse con una instrucción didáctica previa
         # para forzar que la respuesta del modelo siga una orientación pedagógica más útil.
-        prompt_final = content
+        red3_ctx = await self._get_red3_prompt_context(access_token, docente_id)
+
+        prompt_parts = []
+
         if guide:
-            prompt_final = (
+            prompt_parts.append(
                 "INSTRUCCIÓN DIDÁCTICA (obligatoria):\n"
-                f"- {guide}\n\n"
-                "Consulta del docente:\n"
-                f"{content}"
+                f"- {guide}"
             )
+
+        if red3_ctx:
+            prompt_parts.append(red3_ctx)
+
+        prompt_parts.append(
+            "Consulta del docente:\n"
+            f"{content}"
+        )
+
+        prompt_final = "\n\n".join(prompt_parts)
 
         # Con el prompt final, el historial reciente y los fragmentos recuperados del
         # espacio, se genera la respuesta contextual del asistente.
@@ -181,6 +264,45 @@ class EnviarMensajeEspacioPlusUseCase:
             context_chunks=chunks,
             history=history_fmt,
         )
+        print(">>> DEMO_RED3:", DEMO_RED3)
+        print(">>> RED3 SERVICE:", self.red3)
+        print(">>> ANTES DEMO RESPUESTA:", respuesta[:100])
+
+
+       # ===== DEMO RED3 Mostrar Styles =====
+         # ===== DEMO RED3 Mostrar Styles =====
+        if DEMO_RED3 and self.red3:
+            try:
+                profile = await self.red3.get_style_profile_best_effort(
+                    access_token=access_token,
+                    docente_id=docente_id,
+                )
+
+                # 🔥 manejar lista
+                if isinstance(profile, list) and len(profile) > 0:
+                    profile = profile[0]
+
+                print(">>> PROFILE RAW:", profile)
+
+                if profile:
+                    probs = profile.get("style_probs") or {}
+                    main = profile.get("style_main", "")
+
+                    ranked = sorted(
+                        [(k, float(v)) for k, v in probs.items()],
+                        key=lambda x: x[1],
+                        reverse=True,
+                    )[:3]
+
+                    demo_text = " | ".join([f"{k}:{v:.2f}" for k, v in ranked])
+
+                    respuesta = (
+                        f"[RED3 → {main} | {demo_text}]\n\n"
+                        f"{respuesta}"
+                    )
+
+            except Exception as e:
+                print("ERROR RED3 DEMO:", e)
 
         # La respuesta generada también se persiste como mensaje de assistant para que
         # la conversación quede completa y reutilizable en interacciones posteriores.
