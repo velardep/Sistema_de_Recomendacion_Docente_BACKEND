@@ -148,6 +148,285 @@ def normalize_generado_for_red3(generado: Dict[str, Any]) -> Dict[str, Any]:
         "producto": (g.get("producto") or "").strip() if isinstance(g.get("producto"), str) else (g.get("producto") or ""),
     }
 
+def _is_truthy(v: Any) -> bool:
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    if isinstance(v, str):
+        return v.strip().lower() in {"1", "true", "si", "sí", "yes", "on"}
+    return bool(v)
+
+def _validate_pdc_payload(
+    identificacion: Dict[str, Any],
+    contexto: Dict[str, Any],
+    variables: Dict[str, Any],
+    contenidos: List[str],
+    use_psp: bool,
+) -> None:
+    if not str(identificacion.get("area", "") or "").strip():
+        raise ValueError("Falta el área")
+    if not str(identificacion.get("nivel", "") or "").strip():
+        raise ValueError("Falta el nivel")
+    if not str(identificacion.get("anio_escolaridad", "") or "").strip():
+        raise ValueError("Falta el año de escolaridad")
+
+    # Tiempo ahora debe venir estructurado para acercarse al formato real.
+    if not str(identificacion.get("semanas", "") or "").strip():
+        raise ValueError("Falta la cantidad de semanas")
+    if not str(identificacion.get("periodos_por_semana", "") or "").strip():
+        raise ValueError("Falta la cantidad de periodos por semana")
+
+    if not contenidos:
+        raise ValueError("Debes ingresar al menos un contenido")
+
+    if use_psp:
+        if not str(contexto.get("psp_titulo", "") or "").strip():
+            raise ValueError("Falta el título del PSP")
+        if not str(contexto.get("psp_actividad", "") or "").strip():
+            raise ValueError("Falta la actividad del PSP")
+        if not str(contexto.get("objetivo_holistico_pat", "") or "").strip():
+            raise ValueError("Falta el Objetivo Holístico PAT")
+    else:
+        if not str(contexto.get("objetivo_aprendizaje", "") or "").strip():
+            raise ValueError("Falta el objetivo de aprendizaje")
+        if not str(contexto.get("producto", "") or "").strip():
+            raise ValueError("Falta el producto o evidencia esperada")
+
+
+def _build_texto_analisis(
+    identificacion: Dict[str, Any],
+    contexto: Dict[str, Any],
+    contenidos: List[str],
+    use_psp: bool,
+) -> str:
+    base = [
+        f"AREA: {identificacion.get('area', '')}",
+        f"NIVEL: {identificacion.get('nivel', '')}",
+        f"ANIO: {identificacion.get('anio_escolaridad', '')}",
+    ]
+
+    if use_psp:
+        base.extend([
+            f"PSP: {contexto.get('psp_titulo', '')}",
+            f"ACTIVIDAD: {contexto.get('psp_actividad', '')}",
+            f"OBJ_PAT: {contexto.get('objetivo_holistico_pat', '')}",
+        ])
+    else:
+        base.extend([
+            f"OBJ_APRENDIZAJE: {contexto.get('objetivo_aprendizaje', '')}",
+            f"PRODUCTO: {contexto.get('producto', '')}",
+            f"METODOLOGIA: {contexto.get('metodologia', '')}",
+            f"TIPO_EVALUACION: {contexto.get('tipo_evaluacion', '')}",
+        ])
+
+    base.append("CONTENIDOS: " + " | ".join(contenidos))
+    return "\n".join(base)
+
+
+def _to_int(v: Any, default: int = 0) -> int:
+    try:
+        return int(str(v).strip())
+    except Exception:
+        return default
+
+
+def _build_periodos_label(identificacion: Dict[str, Any]) -> str:
+    semanas = _to_int(identificacion.get("semanas"), 0)
+    periodos_por_semana = _to_int(identificacion.get("periodos_por_semana"), 0)
+    duracion_periodo = str(identificacion.get("duracion_periodo", "") or "").strip()
+
+    total = semanas * periodos_por_semana if semanas > 0 and periodos_por_semana > 0 else 0
+
+    if total > 0 and duracion_periodo:
+        return f"{total} periodos ({periodos_por_semana} por semana, {duracion_periodo} min c/u)"
+    if total > 0:
+        return f"{total} periodos"
+    return str(identificacion.get("tiempo", "") or "").strip()
+
+
+def _build_contenidos_bloque(contenidos: List[str]) -> str:
+    return "\n".join(f"- {c}" for c in contenidos if str(c).strip())
+
+
+def _build_redes_influence_text(
+    area_main: str,
+    dims_probs: Dict[str, Any],
+    guidance: Any,
+    context_chunks: List[str],
+) -> str:
+    return f"""
+INFLUENCIA DE REDES Y CONTEXTO:
+- RED1 (clasificación pedagógica): orienta el tono, profundidad, tipo de actividades y énfasis del PDC.
+- RED1 área principal detectada: {area_main}
+- RED1 probabilidades/dimensiones: {json.dumps(dims_probs, ensure_ascii=False)}
+
+- RAG (prontuario recuperado): aporta contexto docente previo y continuidad pedagógica.
+- Fragmentos RAG recuperados: {len(context_chunks or [])}
+
+- RED2 (guidance didáctica): sugiere estrategias, enfoque y tipo de recursos/producción.
+- Guidance RED2: {json.dumps(guidance, ensure_ascii=False)}
+""".strip()
+
+def _build_llm_prompt(
+    identificacion: Dict[str, Any],
+    contexto: Dict[str, Any],
+    contenidos: List[str],
+    guidance: Any,
+    area_main: str,
+    dims_probs: Dict[str, Any],
+    use_psp: bool,
+    context_chunks: List[str],
+) -> str:
+    semanas = _to_int(identificacion.get("semanas"), 0)
+    periodos_por_semana = _to_int(identificacion.get("periodos_por_semana"), 0)
+    duracion_periodo = str(identificacion.get("duracion_periodo", "") or "").strip()
+    periodos_label = _build_periodos_label(identificacion)
+    contenidos_txt = _build_contenidos_bloque(contenidos)
+    redes_txt = _build_redes_influence_text(area_main, dims_probs, guidance, context_chunks)
+
+    base_common = f"""
+Eres un experto boliviano en planificación educativa y debes generar un PDC REALISTA, BREVE, DOCENTE y ESTRUCTURADO para SECUNDARIA.
+
+REGLAS GENERALES OBLIGATORIAS:
+1. Devuelve SOLO JSON válido.
+2. Mantén EXACTAMENTE estas claves:
+   objetivo_holistico, practica, teoria, valoracion, produccion, recursos, criterios, producto
+3. La redacción NO debe parecer texto literario de IA. Debe sentirse como planificación docente real.
+4. Los momentos del proceso formativo deben ser CONCISOS, OPERATIVOS y REALISTAS.
+5. Los contenidos deben respetar el tiempo real de planificación:
+   - semanas: {semanas}
+   - periodos por semana: {periodos_por_semana}
+   - duración de cada periodo: {duracion_periodo}
+   - total: {periodos_label}
+
+# REGLAS CRÍTICAS PARA MOMENTOS (MUY IMPORTANTE)
+6. práctica, teoría, valoración y producción deben ser TEXTOS CORTOS.
+7. NO usar semanas dentro de práctica, teoría, valoración o producción.
+8. NO usar listas por semana.
+9. NO usar markdown (NO **, NO -, NO bullets).
+10. Cada momento debe escribirse como UNA SOLA LÍNEA compacta.
+11. Separar acciones usando punto y coma (;).
+12. Máximo 3 a 4 acciones por cada momento.
+13. Evitar explicaciones largas o redundantes.
+14. Debe parecer texto real de planificación docente, no una secuencia detallada paso a paso.
+
+# FORMATO ESPERADO DE MOMENTOS (OBLIGATORIO)
+Ejemplo correcto:
+Práctica: diálogo inicial sobre el tema; identificación de conceptos clave en el entorno; análisis de ejemplos concretos.
+
+Ejemplo incorrecto:
+- Semana 1:
+- Actividad 1
+- Actividad 2
+
+15. Cada bloque debe poder leerse en una sola mirada (como en plantillas reales).
+16. La influencia de RED1, RAG y RED2 debe reflejarse en:
+   - tipo de actividades
+   - nivel de profundidad
+   - tipo de producción
+   - criterios de evaluación
+
+17. Los contenidos deben mantenerse como están (no inventar estructura nueva si ya vienen organizados).
+
+# RECURSOS DIDÁCTICOS (MEJORA)
+18. Los recursos deben ser concretos, útiles y didácticos, no genéricos.
+19. Evitar listas vagas como "materiales de escritorio".
+20. Incluir entre 3 y 6 recursos máximo.
+21. Diferenciar según contexto:
+
+- Si el enfoque es sociocomunitario (PSP):
+  usar recursos accesibles: papelógrafos, láminas, material reciclado, textos físicos, recursos del entorno, etc.
+
+- Si el enfoque es académico (sin PSP o institucional):
+  se pueden incluir recursos tecnológicos: proyector, computadora, presentaciones digitales, internet, videos educativos, etc.
+
+22. Los recursos deben estar alineados con las actividades y producción.
+
+DATOS:
+- Área: {identificacion.get("area")}
+- Nivel: {identificacion.get("nivel")}
+- Año: {identificacion.get("anio_escolaridad")}
+- Trimestre: {identificacion.get("trimestre")}
+- Semanas: {semanas}
+- Periodos por semana: {periodos_por_semana}
+- Duración de periodo: {duracion_periodo}
+- Total de periodos: {periodos_label}
+
+CONTENIDOS:
+{contenidos_txt}
+
+{redes_txt}
+
+FORMATO DE SALIDA:
+{{
+  "objetivo_holistico": "texto breve y técnico",
+  "practica": ["línea compacta con punto y coma"],
+  "teoria": ["línea compacta con punto y coma"],
+  "valoracion": ["línea compacta con punto y coma"],
+  "produccion": ["línea compacta con punto y coma"],
+  "recursos": ["...", "..."],
+  "criterios": {{
+    "SER": "...",
+    "SABER": "...",
+    "HACER": "...",
+    "DECIDIR": "..."
+  }},
+  "producto": "texto breve"
+}}
+""".strip()
+
+    if use_psp:
+        return f"""
+{base_common}
+
+MODO: CON PSP
+
+DATOS DEL CONTEXTO:
+- PSP: {contexto.get("psp_titulo")}
+- Actividad PSP: {contexto.get("psp_actividad")}
+- Objetivo Holístico PAT: {contexto.get("objetivo_holistico_pat")}
+
+INSTRUCCIONES ESPECÍFICAS:
+1. El objetivo_holistico debe articular PSP + PAT + contenidos.
+2. La diferencia con el modo sin PSP debe ser visible:
+   - lenguaje más sociocomunitario
+   - producción más colectiva o contextual
+   - valoración conectada con comunidad, identidad, convivencia o realidad local
+3. La producción debe sentirse vinculada a una actividad sociocomunitaria o aplicación contextual.
+4. RED1 debe influir en el énfasis pedagógico del área y de los criterios.
+5. RED2 debe influir en estrategias y recursos.
+6. RAG debe influir si aporta continuidad docente o enfoque previo.
+7. Mantén formato docente real, breve y operativo.
+""".strip()
+
+    return f"""
+{base_common}
+
+MODO: SIN PSP
+
+DATOS DEL CONTEXTO:
+- Objetivo de aprendizaje: {contexto.get("objetivo_aprendizaje")}
+- Producto esperado: {contexto.get("producto")}
+- Metodología sugerida: {contexto.get("metodologia")}
+- Tipo de evaluación: {contexto.get("tipo_evaluacion")}
+
+INSTRUCCIONES ESPECÍFICAS:
+1. NO menciones PSP, PAT ni articulación socioproductiva.
+2. La diferencia con el modo con PSP debe ser visible:
+   - lenguaje más académico
+   - producción más analítica, individual o técnica
+   - valoración centrada en aprendizaje, reflexión, responsabilidad y aplicación del conocimiento
+3. El objetivo_holistico debe construirse desde el objetivo de aprendizaje y los contenidos.
+4. RED1 debe influir en el nivel de profundidad y en el tipo de criterios.
+5. RED2 debe influir en metodología, recursos y producción.
+6. RAG debe influir solo si aporta continuidad útil.
+7. Mantén formato docente real, breve y operativo.
+""".strip()
+
+
+
+
 # Este use case orquesta el pipeline completo de generación de PDC:
 # request -> señales (RED1/RAG/RED2) -> LLM -> persistencia -> DOCX -> RED3.
 class GeneratePdcUseCase:
@@ -198,21 +477,39 @@ class GeneratePdcUseCase:
         variables = payload.get("variables", {}) or {}
         contenidos: List[str] = variables.get("contenidos", []) or []
 
+
+        use_psp = _is_truthy(contexto.get("use_psp", True))
+
+        _validate_pdc_payload(
+            identificacion=identificacion,
+            contexto=contexto,
+            variables=variables,
+            contenidos=contenidos,
+            use_psp=use_psp,
+        )
+
         # 1) Crea el request del PDC en base de datos antes de generar contenido para
         # asegurar trazabilidad completa desde el inicio del proceso.
         pdc_request_id = await self.pdc_repo.create_request(access_token, docente_id, payload)
 
         # 2) Construye un texto base unificado con los datos más importantes del PDC.
         # Este texto sirve como entrada común para RED1 y para la búsqueda RAG.
-        texto_analisis = (
-            f"[PDC_REQUEST_ID={pdc_request_id}]\n"
-            f"AREA: {identificacion.get('area')}\n"
-            f"NIVEL: {identificacion.get('nivel')}\n"
-            f"ANIO: {identificacion.get('anio_escolaridad')}\n"
-            f"PSP: {contexto.get('psp_titulo')}\n"
-            f"ACTIVIDAD: {contexto.get('psp_actividad')}\n"
-            f"OBJ_PAT: {contexto.get('objetivo_holistico_pat')}\n"
-            f"CONTENIDOS: {' | '.join(contenidos)}\n"
+        #texto_analisis = (
+         #   f"[PDC_REQUEST_ID={pdc_request_id}]\n"
+          #  f"AREA: {identificacion.get('area')}\n"
+           # f"NIVEL: {identificacion.get('nivel')}\n"
+           # f"ANIO: {identificacion.get('anio_escolaridad')}\n"
+           # f"PSP: {contexto.get('psp_titulo')}\n"
+           # f"ACTIVIDAD: {contexto.get('psp_actividad')}\n"
+           # f"OBJ_PAT: {contexto.get('objetivo_holistico_pat')}\n"
+           # f"CONTENIDOS: {' | '.join(contenidos)}\n"
+        #)
+
+        texto_analisis = _build_texto_analisis(
+            identificacion=identificacion,
+            contexto=contexto,
+            contenidos=contenidos,
+            use_psp=use_psp,
         )
 
         # 3) Si RED1 está habilitada, clasifica el request del PDC para estimar
@@ -272,48 +569,16 @@ class GeneratePdcUseCase:
         # 6) Prompt principal que obliga al LLM a devolver un PDC en formato JSON y a
         # respetar nivel, año, tiempo, contenidos y señales obtenidas del sistema.
         # =========================================================
-        prompt = f"""
-Eres un experto en planificación educativa boliviana (Ley 070) y debes redactar un PDC técnico, coherente y viable.
-
-REGLAS DE ORO:
-- Debes devolver SOLO JSON válido. No incluyas texto antes o después.
-- Debe tener EXACTAMENTE estas claves: objetivo_holistico, practica, teoria, valoracion, produccion, recursos, criterios, producto.
-
-ADAPTACIÓN POR NIVEL Y AÑO (CRÍTICO):
-- NIVEL Y AÑO: El PDC debe ser pedagógicamente coherente con el nivel '{identificacion.get("nivel")}' y el año '{identificacion.get("anio_escolaridad")}'. 
-  * Si es Primaria: Lenguaje sencillo, actividades lúdicas, vivenciales y concretas.
-  * Si es Secundaria: Lenguaje técnico/científico, mayor profundidad analítica, investigación y pensamiento crítico avanzado.
-- DOSIFICACIÓN Y TIEMPO: Ajusta la carga de actividades al 'Tiempo' ({identificacion.get("tiempo")}). No satures si el tiempo es breve; profundiza si es extenso.
-- COBERTURA: Asegúrate de que TODOS los '{contenidos}' sean abordados proporcionalmente.
-
-SEÑALES DEL SISTEMA (influyen con pesos):
-- Red1 (peso {self.WEIGHT_RED1}): dims_probs={dims_probs}, area_main={area_main}. Prioriza las dimensiones con mayor probabilidad.
-- Red2 (peso {self.WEIGHT_RED2}): guidance={guidance}. Integra estas estrategias y recursos recomendados.
-- Prontuario/RAG (peso {self.WEIGHT_RAG}): usa CONTEXTO si existe para precisión temática.
-
-DATOS DEL DOCENTE (INPUT):
-Unidad Educativa: {identificacion.get("unidad_educativa")}
-Nivel: {identificacion.get("nivel")}
-Año: {identificacion.get("anio_escolaridad")}
-Trimestre: {identificacion.get("trimestre")}
-Tiempo: {identificacion.get("tiempo")} 
-Área/Materia: {identificacion.get("area")}
-PSP: {contexto.get("psp_titulo")}
-Actividad PSP: {contexto.get("psp_actividad")}
-Objetivo Holístico PAT: {contexto.get("objetivo_holistico_pat")}
-Contenidos: {contenidos}
-
-LÓGICA PEDAGÓGICA OBLIGATORIA:
-1. Objetivo Holístico: Un solo párrafo (Ser/Saber/Hacer/Decidir). Debe ser una derivación específica del Objetivo del PAT para estos contenidos.
-2. Práctica: Inicio vivencial (experiencia o contacto con la realidad) acorde a la edad.
-3. Teoría: Explicación formal de los contenidos. Ajusta el rigor científico al año de escolaridad.
-4. Valoración: Reflexión ética que una los contenidos con el PSP y la realidad del estudiante.
-5. Producción: Acción transformadora que derive en el Producto final.
-6. Criterios: Evaluación de las 4 dimensiones coherentes con el Nivel y el Objetivo.
-7. Producto: Tangible, evaluable y realizable en el tiempo {identificacion.get("tiempo")}.
-
-Devuelve SOLO JSON.
-"""
+        prompt = _build_llm_prompt(
+            identificacion=identificacion,
+            contexto=contexto,
+            contenidos=contenidos,
+            guidance=guidance,
+            area_main=area_main,
+            dims_probs=dims_probs,
+            use_psp=use_psp,
+            context_chunks=context_chunks,
+        )
 
         # Genera el contenido final del PDC usando el prompt estructurado y el contexto
         # recuperado por RAG cuando esté disponible.
@@ -334,6 +599,7 @@ Devuelve SOLO JSON.
             docente_id=docente_id,
             red1={
                 "enabled": self.enable_red1,
+                "role_in_generation": "define énfasis pedagógico, profundidad, tono y criterios",
                 "dims_probs": dims_probs,
                 "area_main": area_main,
                 "raw": (red1_result or {}).get("out") if red1_result else None,
@@ -341,10 +607,12 @@ Devuelve SOLO JSON.
             },
             red2={
                 "enabled": self.enable_red2,
+                "role_in_generation": "sugiere estrategias, recursos, enfoque metodológico y tipo de producción",
                 "guidance": guidance,
             },
             prontuario={
                 "enabled": self.enable_rag,
+                "role_in_generation": "aporta continuidad docente y contexto recuperado por RAG",
                 "top_k": 6,
                 "hits": len(rag_results or []),
                 "results": rag_results or [],
@@ -372,6 +640,13 @@ Devuelve SOLO JSON.
                 "pdc_request_id": pdc_request_id,
                 "pdc_document_id": pdc_document_id,
                 "rag_hits": len(rag_results or []),
+                "use_psp": use_psp,
+                "input_mode": "with_psp" if use_psp else "without_psp",
+                "periodos_label": _build_periodos_label(identificacion),
+                "red1_area_main": area_main,
+                "red1_dims_probs": dims_probs,
+                "red2_guidance_used": bool(guidance),
+                "rag_context_hits": len(context_chunks or []),
                 "flags": {
                     "red1": self.enable_red1,
                     "rag": self.enable_rag,
@@ -407,6 +682,8 @@ Devuelve SOLO JSON.
                         "anio": identificacion.get("anio_escolaridad"),
                         "tiempo": identificacion.get("tiempo"),
                         "contenidos": contenidos,
+                        "use_psp": use_psp,
+                        "objetivo_aprendizaje": contexto.get("objetivo_aprendizaje") if not use_psp else "",
                         "bloques": red3_bloques, 
                     },
                 )

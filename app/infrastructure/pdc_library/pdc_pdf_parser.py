@@ -1,3 +1,12 @@
+# app/infrastructure/pdc_library/pdc_pdf_parser.py
+
+# Este archivo define funciones para extraer y normalizar el texto de archivos PDF de PDC, 
+# con el objetivo de convertirlos al mismo formato estructurado que obtenemos de los DOCX. 
+# Esto permite que los docentes puedan subir sus PDC en formato PDF y el sistema pueda procesarlos 
+# correctamente, extrayendo teoría, práctica, producción, producto y criterios aunque vengan con formatos 
+# variados o con artefactos embebidos (listas/dicts serializados). Se utilizan técnicas de limpieza robustas 
+# para manejar las inconsistencias típicas de los PDFs exportados desde Word u otras herramientas.
+
 from __future__ import annotations
 
 import re
@@ -263,117 +272,88 @@ def _join_wrapped_paragraphs(lines: List[str]) -> List[str]:
 
 
 def parse_pdc_pdf_to_red3_bloques(data: bytes) -> Dict[str, Any]:
-    """
-    Devuelve el mismo formato que DOCX:
-      {
-        "teoria": [...],
-        "practica": [...],
-        "produccion": [...],
-        "producto": "...",
-        "criterios": {"SER": "...", "SABER": "...", "HACER": "...", "DECIDIR": "..."}
-      }
-
-    Mejoras:
-    - Soporta bullets/símbolos raros (carátulas)
-    - Reconstruye párrafos desde líneas “wrap”
-    - Headers robustos
-    - Criterios por bloques SER/SABER/HACER/DECIDIR aunque no vengan como "SER:"
-    - Filtra residuos tipo "{'lectura_pdf': ...}"
-    """
     raw = _extract_pdf_text(data)
     if not raw or len(raw) < 30:
         return {
-            "teoria": [],
-            "practica": [],
-            "produccion": [],
-            "producto": "",
-            "criterios": {"SER": "", "SABER": "", "HACER": "", "DECIDIR": ""},
+            "document": {
+                "text_preview": "",
+                "text_length": 0,
+            },
+            "blocks": {
+                "main_pedagogical_block": "",
+                "evaluation_product_block": "",
+                "resources_time_block": "",
+            },
+            "analysis": {
+                "has_product_keyword": False,
+                "has_resources_keyword": False,
+                "has_eval_keyword": False,
+                "has_week_structure": False,
+            },
         }
 
     lines = _normalize_lines(raw)
     paras = _join_wrapped_paragraphs(lines)
 
-    # Secciones acumuladas
-    sections: Dict[str, List[str]] = {
-        "practica": [],
-        "teoria": [],
-        "valoracion": [],
-        "produccion": [],
-        "producto": [],
-        "criterios": [],
-    }
+    def is_referential(p: str) -> bool:
+        pl = p.lower()
+        return any(k in pl for k in [
+            "plan de desarrollo curricular",
+            "datos referenciales",
+            "distrito educativo",
+            "unidad educativa",
+            "nivel",
+            "año de escolaridad",
+            "paralelo",
+            "docente",
+            "maestra",
+            "maestro",
+            "trimestre",
+            "fecha",
+        ])
 
-    # Criterios por dimensión
-    criterios_dims: Dict[str, List[str]] = {k: [] for k in _DIM_WORDS}
+    filtered_paras = [p for p in paras if not is_referential(p)]
 
-    current_section: Optional[str] = None
-    current_dim: Optional[str] = None
+    text_full = " ".join(filtered_paras).strip()
+    text_preview = text_full[:500]
 
-    def push_text(target_list: List[str], txt: str):
-        t = (txt or "").strip()
-        if not t:
-            return
+    main_block_parts: List[str] = []
+    eval_block_parts: List[str] = []
+    resources_block_parts: List[str] = []
 
-        # ✅ Corta artefactos embebidos tipo dict/lista (recursos) dentro del párrafo
-        t = _strip_embedded_artifacts(t)
-        if not t or len(t) < 20:
-            return
+    for p in filtered_paras:
+        pl = p.lower()
 
-        # evita “headers” repetidos como contenido
-        if _is_major_header(t) or _is_dim_header(t):
-            return
-
-        # evita basura residual (líneas completas raras)
-        if _NOISE_LINE_RE.match(t):
-            return
-
-        target_list.append(t)
-
-    for p in paras:
-        # headers principales
-        sec = _is_major_header(p)
-        if sec:
-            current_section = sec
-            current_dim = None
-            continue
-
-        # headers de dimensiones dentro de criterios
-        dim = _is_dim_header(p)
-        if dim:
-            current_section = "criterios"
-            current_dim = dim
-            continue
-
-        # asignación
-        if current_section == "criterios" and current_dim:
-            push_text(criterios_dims[current_dim], p)
-        elif current_section in sections:
-            push_text(sections[current_section], p)
+        if any(k in pl for k in ["criterio", "evaluación", "evaluacion", "ser:", "saber:", "hacer:", "decidir:", "producto"]):
+            eval_block_parts.append(p)
+        elif any(k in pl for k in ["recurso", "periodo", "período", "semana", "duración", "duracion", "tiempo"]):
+            resources_block_parts.append(p)
         else:
-            # fuera de secciones: ignoramos (carátulas, datos referenciales, etc.)
-            continue
+            main_block_parts.append(p)
 
-    # Construye producto:
-    # En muchos PDC PDF aparece como "Productos:" y luego una descripción larga.
-    producto_txt = ""
-    if sections["producto"]:
-        # toma el primer bloque “largo”
-        # (si hay varios, los une)
-        producto_txt = " ".join(sections["producto"]).strip()
+    main_block = " ".join(main_block_parts).strip()
+    eval_block = " ".join(eval_block_parts).strip()
+    resources_block = " ".join(resources_block_parts).strip()
 
-    # Criterios: une cada dimensión en un string
-    criterios_out = {
-        "SER": " ".join(criterios_dims["SER"]).strip(),
-        "SABER": " ".join(criterios_dims["SABER"]).strip(),
-        "HACER": " ".join(criterios_dims["HACER"]).strip(),
-        "DECIDIR": " ".join(criterios_dims["DECIDIR"]).strip(),
-    }
+    has_week_structure = any("semana" in p.lower() for p in filtered_paras)
+    has_product_keyword = any("producto" in p.lower() for p in filtered_paras)
+    has_resources_keyword = any("recurso" in p.lower() for p in filtered_paras)
+    has_eval_keyword = any(k in text_full.lower() for k in ["criterio", "evaluación", "evaluacion", "ser:", "saber:", "hacer:", "decidir:"])
 
-    # Teoría / práctica / producción como lista de párrafos (como DOCX)
     return {
-        "teoria": sections["teoria"],
-        "practica": sections["practica"],
-        "produccion": sections["produccion"],
-        "producto": producto_txt,
-        "criterios": criterios_out,
+        "document": {
+            "text_preview": text_preview,
+            "text_length": len(text_full),
+        },
+        "blocks": {
+            "main_pedagogical_block": main_block,
+            "evaluation_product_block": eval_block,
+            "resources_time_block": resources_block,
+        },
+        "analysis": {
+            "has_product_keyword": has_product_keyword,
+            "has_resources_keyword": has_resources_keyword,
+            "has_eval_keyword": has_eval_keyword,
+            "has_week_structure": has_week_structure,
+        },
     }

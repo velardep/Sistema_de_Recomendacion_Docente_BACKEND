@@ -131,18 +131,22 @@ def _split_criterios(text: str) -> Dict[str, str]:
 
 
 def parse_pdc_docx_to_red3_bloques(docx_bytes: bytes) -> Dict[str, Any]:
-    """
-    Best-effort pero ENFOCADO al formato ministerial común:
-    - ORIENTACIONES METODOLÓGICAS suele venir en 1 celda con PRACTICA/TEORIA/VALORACION/PRODUCCION
-    - CRITERIOS DE EVALUACIÓN suele venir en otra celda con SER/SABER/HACER/DECIDIR
-    - Productos: suele venir en otra celda "Productos:"
-    """
     empty = {
-        "teoria": [],
-        "practica": [],
-        "produccion": [],
-        "producto": "",
-        "criterios": {"SER": "", "SABER": "", "HACER": "", "DECIDIR": ""},
+        "document": {
+            "text_preview": "",
+            "text_length": 0,
+        },
+        "blocks": {
+            "main_pedagogical_block": "",
+            "evaluation_product_block": "",
+            "resources_time_block": "",
+        },
+        "analysis": {
+            "has_product_keyword": False,
+            "has_resources_keyword": False,
+            "has_eval_keyword": False,
+            "has_week_structure": False,
+        },
     }
 
     try:
@@ -152,48 +156,72 @@ def parse_pdc_docx_to_red3_bloques(docx_bytes: bytes) -> Dict[str, Any]:
 
     blocks = _iter_doc_blocks(doc)
 
-    orient_cell = ""
-    criterios_cell = ""
-    producto_cell = ""
+    all_texts: List[str] = []
+    for _, tx in blocks:
+        t = _norm(tx)
+        if t:
+            all_texts.append(t)
 
-    for typ, tx in blocks:
-        l = tx.lower()
+    def is_referential(p: str) -> bool:
+        pl = p.lower()
+        return any(k in pl for k in [
+            "plan de desarrollo curricular",
+            "datos referenciales",
+            "distrito educativo",
+            "unidad educativa",
+            "nivel",
+            "año de escolaridad",
+            "anio de escolaridad",
+            "paralelo",
+            "docente",
+            "maestra",
+            "maestro",
+            "trimestre",
+            "fecha",
+        ])
 
-        # 1) Orientaciones: buscamos una celda con >=3 marcadores fuertes (PRACTICA/TEORIA/...)
-        if len(_SEC_RE.findall(tx)) >= 3:
-            orient_cell = tx
+    filtered_texts = [p for p in all_texts if not is_referential(p)]
 
-        # 2) Producto(s) en celda "Productos:"
-        if l.startswith("productos:") or l.startswith("producto:"):
-            producto_cell = tx
+    text_full = " ".join(filtered_texts).strip()
+    text_preview = text_full[:500]
 
-        # 3) Criterios: celda con varias dims + ✓
-        if "✓" in tx and len(re.findall(r"(?i)\b(SER|SABER|HACER|DECIDIR)\b", tx)) >= 3:
-            criterios_cell = tx
+    main_block_parts: List[str] = []
+    eval_block_parts: List[str] = []
+    resources_block_parts: List[str] = []
 
-    parts = _split_orientaciones(orient_cell)
+    for p in filtered_texts:
+        pl = p.lower()
 
-    # Nota: keys pueden venir con acento o sin acento
-    practica_txt = parts.get("PRÁCTICA") or parts.get("PRACTICA") or ""
-    teoria_txt = parts.get("TEORÍA") or parts.get("TEORIA") or ""
-    produccion_txt = parts.get("PRODUCCIÓN") or parts.get("PRODUCCION") or ""
+        if any(k in pl for k in ["criterio", "evaluación", "evaluacion", "ser:", "saber:", "hacer:", "decidir:", "producto", "productos:"]):
+            eval_block_parts.append(p)
+        elif any(k in pl for k in ["recurso", "periodo", "período", "semana", "duración", "duracion", "tiempo"]):
+            resources_block_parts.append(p)
+        else:
+            main_block_parts.append(p)
 
-    practica = _split_to_list(practica_txt)
-    teoria = _split_to_list(teoria_txt)
-    produccion = _split_to_list(produccion_txt)
+    main_block = " ".join(main_block_parts).strip()
+    eval_block = " ".join(eval_block_parts).strip()
+    resources_block = " ".join(resources_block_parts).strip()
 
-    producto = producto_cell
-    if producto:
-        producto = re.sub(r"(?i)^\s*productos?\s*:\s*", "", producto).strip()
-        producto = re.sub(r"^\s*✓\s*", "", producto).strip()
-        producto = _norm(producto)
-
-    criterios = _split_criterios(criterios_cell)
+    has_week_structure = any("semana" in p.lower() for p in filtered_texts)
+    has_product_keyword = any("producto" in p.lower() for p in filtered_texts)
+    has_resources_keyword = any("recurso" in p.lower() for p in filtered_texts)
+    has_eval_keyword = any(k in text_full.lower() for k in ["criterio", "evaluación", "evaluacion", "ser:", "saber:", "hacer:", "decidir:"])
 
     return {
-        "teoria": teoria,
-        "practica": practica,
-        "produccion": produccion,
-        "producto": producto,
-        "criterios": criterios,
+        "document": {
+            "text_preview": text_preview,
+            "text_length": len(text_full),
+        },
+        "blocks": {
+            "main_pedagogical_block": main_block,
+            "evaluation_product_block": eval_block,
+            "resources_time_block": resources_block,
+        },
+        "analysis": {
+            "has_product_keyword": has_product_keyword,
+            "has_resources_keyword": has_resources_keyword,
+            "has_eval_keyword": has_eval_keyword,
+            "has_week_structure": has_week_structure,
+        },
     }

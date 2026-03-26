@@ -1,3 +1,11 @@
+# app/infrastructure/pdc_library/pdc_library_repo.py
+
+# Este archivo define el repositorio de persistencia para la biblioteca de PDC, que permite a los 
+# docentes subir, listar, obtener y eliminar documentos relacionados con sus Planes de Desarrollo Curricular (PDC). 
+# El repositorio interactúa con Supabase tanto para almacenar la metadata de los documentos en una tabla como para 
+# guardar los archivos en un bucket privado de Storage. Utiliza autenticación basada en Bearer tokens del usuario 
+# para asegurar que cada docente solo pueda acceder a sus propios documentos.
+
 from __future__ import annotations
 
 import os

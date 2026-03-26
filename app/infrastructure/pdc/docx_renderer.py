@@ -13,6 +13,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 from docx.shared import Pt, Inches
+from docx.enum.section import WD_ORIENT
 
 
 # Helpers de estilo
@@ -20,10 +21,18 @@ from docx.shared import Pt, Inches
 # uniforme y más cercano al estilo final esperado del PDC.
 def _set_page(doc: Document):
     sec = doc.sections[0]
-    sec.top_margin = Inches(0.6)
-    sec.bottom_margin = Inches(0.6)
-    sec.left_margin = Inches(0.8)
-    sec.right_margin = Inches(0.8)
+
+    # ORIENTACIÓN HORIZONTAL
+    sec.orientation = WD_ORIENT.LANDSCAPE
+
+    # Intercambiar ancho y alto (OBLIGATORIO en python-docx)
+    sec.page_width, sec.page_height = sec.page_height, sec.page_width
+
+    # Márgenes
+    sec.top_margin = Inches(0.5)
+    sec.bottom_margin = Inches(0.5)
+    sec.left_margin = Inches(0.6)
+    sec.right_margin = Inches(0.6)
 
 # Helper de formato básico para insertar texto dentro de un párrafo con una
 # tipografía y tamaño consistentes en todo el documento.
@@ -36,17 +45,17 @@ def _set_run(p, text, bold=False, size=11):
 
 # Aplica color de fondo a una celda de tabla usando manipulación XML, útil
 # para resaltar encabezados o secciones importantes.
-def _shade_cell(cell, fill_hex: str):
-    tcPr = cell._tc.get_or_add_tcPr()
-    shd = OxmlElement("w:shd")
-    shd.set(qn("w:val"), "clear")
-    shd.set(qn("w:color"), "auto")
-    shd.set(qn("w:fill"), fill_hex)
-    tcPr.append(shd)
+#def _shade_cell(cell, fill_hex: str):
+ #   tcPr = cell._tc.get_or_add_tcPr()
+ #   shd = OxmlElement("w:shd")
+ #   shd.set(qn("w:val"), "clear")
+ #   shd.set(qn("w:color"), "auto")
+ #   shd.set(qn("w:fill"), fill_hex)
+ #   tcPr.append(shd)
 
 # Aplica bordes visibles a una celda individual para mantener el estilo visual
 # de tablas y cajas dentro del documento.
-def _set_cell_borders(cell, color="2F75B5", size="12"):
+def _set_cell_borders(cell, color="000000", size="8"):
     tcPr = cell._tc.get_or_add_tcPr()
     tcBorders = tcPr.find(qn("w:tcBorders"))
     if tcBorders is None:
@@ -65,7 +74,7 @@ def _set_cell_borders(cell, color="2F75B5", size="12"):
 
 # Aplica bordes a toda una tabla, incluyendo bordes internos, para que su
 # estructura quede claramente delimitada en el documento final.
-def _set_table_borders(table, color="2F75B5", size="12"):
+def _set_table_borders(table, color="000000", size="8"):
     tbl = table._tbl
     tblPr = tbl.tblPr
     tblBorders = tblPr.find(qn("w:tblBorders"))
@@ -104,83 +113,83 @@ def _as_list(v: Any) -> List[str]:
         return [s]
     return [str(v).strip()]
 
-# Divide un texto largo en frases más manejables para mejorar la legibilidad
-# cuando se renderiza como checklist o lista.
-def _split_sentences(s: str) -> List[str]:
-    import re
+def _text_or_join(value: Union[str, List[str], None]) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return "\n".join(str(x).strip() for x in value if str(x).strip())
+    return str(value).strip()
 
-    s = (s or "").strip()
-    if not s:
-        return []
-    if "\n" in s:
-        return [x.strip("•- \t") for x in s.split("\n") if x.strip()]
 
-    parts = re.split(r"(?<=[\.\;\:])\s+", s)
-    parts = [p.strip() for p in parts if p.strip()]
-    return parts if len(parts) > 1 else [s]
+def _merge_row(table, row_idx: int, start_col: int, end_col: int):
+    cell = table.cell(row_idx, start_col)
+    for col in range(start_col + 1, end_col + 1):
+        cell = cell.merge(table.cell(row_idx, col))
+    return cell
 
-# Agrega una lista de elementos dentro de una celda usando un formato visual
-# tipo checklist con símbolo de verificación.
-def _add_checklist(cell, items: Union[List[str], str]):
-    lst = _as_list(items)
-    if not lst:
-        return
-    for it in lst:
-        p = cell.add_paragraph()
-        p.paragraph_format.space_after = Pt(0)
-        p.add_run("✓ " + it)
 
-# Construye una sección en formato de caja con borde para mostrar bloques como
-# objetivo holístico, perfil de salida, contenidos o producto. Puede renderizar
-# texto corrido o listas según el tipo de contenido recibido.
-def _boxed_section(doc: Document, title: str, body: Union[str, List[str]], bullets: bool = True):
-    """
-    Caja 1x1 con borde.
-    bullets=False -> texto corrido (ideal para Objetivo Holístico)
-    bullets=True  -> lista con ✓
-    """
-    t = doc.add_table(rows=1, cols=1)
-    _set_table_borders(t)
-    c = t.cell(0, 0)
-    _set_cell_borders(c)
+def _write_cell(cell, text: str, bold: bool = False, size: int = 10, align=WD_ALIGN_PARAGRAPH.LEFT):
+    p = _clear_cell(cell)
+    p.alignment = align
+    _set_run(p, text or "", bold=bold, size=size)
+    return p
 
-    p = _clear_cell(c)
-    _set_run(p, f"{title}:", bold=False, size=11)
-    p.paragraph_format.space_after = Pt(4)
 
-    # Si el contenido ya viene como lista, se recorre directamente para mostrarlo
-    # como texto simple o checklist según el parámetro `bullets`.
-    if isinstance(body, list):
-        lines = _as_list(body)
-        if not lines:
-            return
-        if not bullets:
-            p2 = c.add_paragraph(lines[0])
-            p2.paragraph_format.space_after = Pt(2)
-            return
-        for ln in lines:
-            p2 = c.add_paragraph()
-            p2.paragraph_format.space_after = Pt(0)
-            _set_run(p2, "✓ " + ln, size=11)
+def _write_multiline_cell(cell, lines: Union[str, List[str]], bold_first: bool = False, size: int = 10):
+    p = _clear_cell(cell)
+
+    if isinstance(lines, list):
+        clean = [str(x).strip() for x in lines if str(x).strip()]
+    else:
+        raw = str(lines or "").strip()
+        clean = [ln.strip() for ln in raw.split("\n") if ln.strip()]
+
+    if not clean:
+        _set_run(p, "", size=size)
         return
 
-    # Si el contenido es texto simple, primero se valida que no esté vacío antes
-    # de decidir cómo renderizarlo.
-    txt = (body or "").strip()
-    if not txt:
-        return
+    for i, ln in enumerate(clean):
+        px = p if i == 0 else cell.add_paragraph()
+        _set_run(px, ln, bold=(bold_first and i == 0), size=size)
+        px.paragraph_format.space_after = Pt(1)
 
-    if not bullets:
-        p2 = c.add_paragraph(txt)
-        p2.paragraph_format.space_after = Pt(2)
-        return
-    
-    # Cuando el contenido es un párrafo largo y se quiere mostrar con viñetas,
-    # se divide en frases para que el resultado sea más claro visualmente.
-    for ln in _split_sentences(txt):
-        p2 = c.add_paragraph()
-        p2.paragraph_format.space_after = Pt(0)
-        _set_run(p2, "✓ " + ln, size=11)
+
+def _criterio_to_text(v: Any) -> str:
+    if isinstance(v, list):
+        return " ".join(str(x).strip() for x in v if str(x).strip())
+    return str(v or "").strip()
+
+
+def _to_int(v: Any, default: int = 0) -> int:
+    try:
+        return int(str(v).strip())
+    except Exception:
+        return default
+
+
+def _periodos_label_from_ident(ident: Dict[str, Any]) -> str:
+    semanas = _to_int(ident.get("semanas"), 0)
+    periodos_por_semana = _to_int(ident.get("periodos_por_semana"), 0)
+    total = semanas * periodos_por_semana if semanas > 0 and periodos_por_semana > 0 else 0
+    return f"{total} periodos" if total > 0 else str(ident.get("tiempo", "") or "").strip()
+
+
+def _split_week_contents(contenidos: List[str]) -> List[str]:
+    out: List[str] = []
+    for item in contenidos:
+        s = str(item or "").strip()
+        if not s:
+            continue
+        out.append(s)
+    return out
+
+
+def _prefix_lines(title: str, value: Union[str, List[str], None]) -> List[str]:
+    lines = _as_list(value)
+    if not lines:
+        return [f"{title}:"]
+    return [f"{title}:"] + [f"• {x}" for x in lines]
+
 
 
 # Función principal que arma el documento DOCX del PDC. Toma los datos de
@@ -192,184 +201,210 @@ def render_pdc_docx(payload: dict, generado: dict) -> BytesIO:
     doc = Document()
     _set_page(doc)
 
-    # TITULO
+    ident = payload.get("identificacion", {}) or {}
+    contexto = payload.get("contexto", {}) or {}
+    variables = payload.get("variables", {}) or {}
+    contenidos = variables.get("contenidos", []) or []
+
+    use_psp = bool(contexto.get("use_psp", True))
+
+    unidad_educativa = ident.get("unidad_educativa", "") or ""
+    area = ident.get("area", "") or ""
+    nivel = ident.get("nivel", "") or ""
+    anio = ident.get("anio_escolaridad", "") or ""
+    trimestre = ident.get("trimestre", "") or ""
+    docente = ident.get("docente", "") or ""
+
+    semanas = _to_int(ident.get("semanas"), 0)
+    periodos_por_semana = _to_int(ident.get("periodos_por_semana"), 0)
+    duracion_periodo = str(ident.get("duracion_periodo", "") or "").strip()
+    tiempo = _periodos_label_from_ident(ident)
+
+    # En la plantilla final se mostrará objetivo de aprendizaje.
+    # Con PSP usamos el objetivo generado porque articula PAT + PSP.
+    # Sin PSP usamos el input directo del docente.
+    objetivo_aprendizaje = (
+        str(generado.get("objetivo_holistico", "") or "").strip()
+        if use_psp
+        else str(contexto.get("objetivo_aprendizaje", "") or "").strip()
+    )
+
+    practica = _text_or_join(generado.get("practica"))
+    teoria = _text_or_join(generado.get("teoria"))
+    valoracion = _text_or_join(generado.get("valoracion"))
+    produccion = _text_or_join(generado.get("produccion"))
+    recursos = _text_or_join(generado.get("recursos"))
+    producto = _text_or_join(generado.get("producto"))
+
+    criterios = generado.get("criterios", {}) or {}
+    ser = _criterio_to_text(criterios.get("SER"))
+    saber = _criterio_to_text(criterios.get("SABER"))
+    hacer = _criterio_to_text(criterios.get("HACER"))
+    decidir = _criterio_to_text(criterios.get("DECIDIR"))
+
+    # Encabezado principal
     h = doc.add_paragraph()
     h.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r = h.add_run("PLAN DE DESARROLLO CURRICULAR")
     r.bold = True
-    r.font.size = Pt(16)
+    r.font.size = Pt(14)
     r.font.name = "Calibri"
 
-    doc.add_paragraph("")
-
-    # Recupera la sección de identificación del payload para poblar los datos referenciales.
-    ident = payload.get("identificacion", {}) or {}
-
-    doc.add_paragraph("")
-    titulo = doc.add_paragraph()
-    _set_run(titulo, "I.- DATOS REFERENCIALES.-", bold=True, size=12)
+    sub = doc.add_paragraph()
+    sub.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r2 = sub.add_run("SECUNDARIA COMUNITARIA PRODUCTIVA")
+    r2.bold = True
+    r2.font.size = Pt(11)
+    r2.font.name = "Calibri"
 
     doc.add_paragraph("")
 
-    # Define los campos de identificación que se mostrarán en la primera sección del documento.
-    datos = [
-        ("Distrito Educativo", ident.get("distrito_educativo", "")),
-        ("Núcleo Educativo", ident.get("nucleo_educativo", "")),
-        ("Unidad Educativa", ident.get("unidad_educativa", "")),
-        ("Area/Materia", ident.get("area", "")),
-        ("Nivel", ident.get("nivel", "")),
-        ("Año de Escolaridad", ident.get("anio_escolaridad", "")),
-        ("Docente", ident.get("docente", "")),
-        ("Trimestre", ident.get("trimestre", "")),
-        ("Tiempo", ident.get("tiempo", "")),
+    # DATOS REFERENCIALES
+    distrito_educativo = str(ident.get("distrito_educativo", "") or "").strip()
+    fecha_inicio = str(ident.get("fecha_inicio", "") or "").strip()
+    fecha_fin = str(ident.get("fecha_fin", "") or "").strip()
+
+    t1 = doc.add_table(rows=8, cols=4)
+    t1.autofit = True
+    _set_table_borders(t1)
+
+    # Encabezado
+    c = _merge_row(t1, 0, 0, 3)
+    _write_cell(c, "DATOS REFERENCIALES", bold=True, size=11, align=WD_ALIGN_PARAGRAPH.CENTER)
+
+    # Fila 1
+    _write_cell(t1.cell(1, 0), "Distrito educativo", bold=True)
+    _write_cell(t1.cell(1, 1), distrito_educativo)
+    _write_cell(t1.cell(1, 2), "Unidad Educativa", bold=True)
+    _write_cell(t1.cell(1, 3), unidad_educativa)
+
+    # Fila 2
+    _write_cell(t1.cell(2, 0), "Nivel", bold=True)
+    _write_cell(t1.cell(2, 1), nivel)
+    _write_cell(t1.cell(2, 2), "Año de escolaridad/\nParalelo", bold=True)
+    _write_cell(t1.cell(2, 3), anio)
+
+    # Fila 3
+    _write_cell(t1.cell(3, 0), "Maestra/o", bold=True)
+    c = _merge_row(t1, 3, 1, 3)
+    _write_cell(c, docente)
+
+    # Fila 4
+    _write_cell(t1.cell(4, 0), "Área", bold=True)
+    c = _merge_row(t1, 4, 1, 3)
+    _write_cell(c, area)
+
+    # Fila 5
+    _write_cell(t1.cell(5, 0), "Trimestre", bold=True)
+    c = _merge_row(t1, 5, 1, 3)
+    _write_cell(c, trimestre)
+
+    # Fila 6
+    _write_cell(t1.cell(6, 0), "Fecha", bold=True)
+    c = _merge_row(t1, 6, 1, 3)
+    fecha_text = ""
+    if fecha_inicio and fecha_fin:
+        fecha_text = f"Del: {fecha_inicio}        Al: {fecha_fin}"
+    elif fecha_inicio:
+        fecha_text = f"Del: {fecha_inicio}"
+    elif fecha_fin:
+        fecha_text = f"Al: {fecha_fin}"
+    _write_cell(c, fecha_text)
+
+    # Fila 7
+    _write_cell(t1.cell(7, 0), "Tiempo", bold=True)
+    c = _merge_row(t1, 7, 1, 3)
+    _write_cell(c, tiempo)
+
+    doc.add_paragraph("")
+
+    # =========================================================
+    # TABLA PRINCIPAL (FORMATO FISCAL REAL)
+    # =========================================================
+    t2 = doc.add_table(rows=2, cols=6)
+    t2.style = "Table Grid"
+
+    headers = [
+        "OBJETIVO DE APRENDIZAJE",
+        f"CONTENIDOS ({semanas} semanas)" if semanas else "CONTENIDOS",
+        "MOMENTOS DEL PROCESO FORMATIVO",
+        "RECURSOS",
+        "PERÍODOS",
+        "CRITERIOS DE EVALUACIÓN (SER – SABER – HACER – DECIDIR)",
     ]
 
-    # Usa una tabla simple de dos columnas para alinear etiquetas y valores de forma ordenada.
-    tabla = doc.add_table(rows=len(datos), cols=2)
+    # Header row
+    for i, h in enumerate(headers):
+        _write_cell(t2.cell(0, i), h, bold=True, align=WD_ALIGN_PARAGRAPH.CENTER)
 
-    # Recorre cada dato referencial y lo inserta en su fila correspondiente.
-    for i, (label, value) in enumerate(datos):
-        row = tabla.rows[i].cells
+    # Contenido
+    t2.cell(1, 0).text = objetivo_aprendizaje
 
-        p0 = row[0].paragraphs[0]
-        p0.paragraph_format.space_after = Pt(2)
-        _set_run(p0, f"{label}:", bold=False, size=11)
+    # CONTENIDOS
+    _write_multiline_cell(
+        t2.cell(1, 1),
+        _split_week_contents(contenidos),
+        size=10,
+    )
 
-        p1 = row[1].paragraphs[0]
-        p1.paragraph_format.space_after = Pt(2)
-        _set_run(p1, str(value or ""), size=11)
+    # MOMENTOS
+    momentos = (
+        _prefix_lines("Práctica", generado.get("practica"))
+        + _prefix_lines("Teoría", generado.get("teoria"))
+        + _prefix_lines("Valoración", generado.get("valoracion"))
+        + _prefix_lines("Producción", generado.get("produccion"))
+    )
 
-    # Elimina los bordes de esta tabla para que los datos referenciales queden
-    # visualmente más limpios que las tablas metodológicas del PDC.
-    tbl = tabla._tbl
-    tblPr = tbl.tblPr
-    tblBorders = tblPr.find(qn("w:tblBorders"))
-    if tblBorders is not None:
-        tblPr.remove(tblBorders)
+    _write_multiline_cell(
+        t2.cell(1, 2),
+        momentos,
+        size=10,
+    )
 
-    doc.add_paragraph("")
+    # RECURSOS
+    _write_multiline_cell(
+        t2.cell(1, 3),
+        _as_list(generado.get("recursos")),
+        size=10,
+    )
 
-    # OBJETIVO / PERFIL / CONTENIDOS
-    # Renderiza el objetivo holístico como bloque destacado en una caja de texto.
-    objetivo = (generado or {}).get("objetivo_holistico", "") or ""
-    _boxed_section(doc, "Objetivo Holístico", objetivo, bullets=False)
+    # PERIODOS
+    periodos_text = tiempo
+    if semanas > 0 and periodos_por_semana > 0 and duracion_periodo:
+        periodos_text = f"{tiempo} ({periodos_por_semana} por semana, {duracion_periodo} min c/u)"
 
-    # Recupera el perfil de salida generado; si no existe, intenta construir un
-    # fallback simple usando criterios disponibles para no dejar la sección vacía.
-    perfil = (generado or {}).get("perfil_salida")
-    if not perfil:
-        crit = (generado or {}).get("criterios", {}) or {}
-        perfil = []
-        if isinstance(crit, dict):
-            for kk in ("SER", "SABER"):
-                vv = crit.get(kk) or crit.get(kk.capitalize()) or crit.get(kk.lower())
-                if vv:
-                    perfil += _as_list(vv)[:1]
-    _boxed_section(doc, "Perfil de salida", perfil, bullets=True)
+    periodos_lines = []
 
-    # Muestra los contenidos del PDC en una caja separada usando formato checklist.
-    contenidos = (payload.get("variables", {}) or {}).get("contenidos", []) or []
-    _boxed_section(doc, "Contenidos", contenidos, bullets=True)
+    if semanas > 0 and periodos_por_semana > 0:
+        for i in range(1, semanas + 1):
+            periodos_lines.append(f"Semana {i}: {periodos_por_semana} periodos")
 
-    doc.add_paragraph("")
+        if duracion_periodo:
+            periodos_lines.append(f"Duración: {duracion_periodo} min por periodo")
+    else:
+        periodos_lines.append(periodos_text)
 
-    # Construye la tabla principal del documento, donde se organizan orientaciones,
-    # materiales y criterios de evaluación.
-    main = doc.add_table(rows=2, cols=3)
-    _set_table_borders(main)
+    _write_multiline_cell(
+        t2.cell(1, 4),
+        periodos_lines,
+        size=10,
+    )
 
-    # Define y formatea los encabezados de las tres columnas principales.
-    headers = main.rows[0].cells
-    for i, txt in enumerate(
-        ["ORIENTACIONES METODOLÓGICAS", "MATERIALES\nEDUCATIVOS", "CRITERIOS DE\nEVALUACIÓN"]
-    ):
-        p = _clear_cell(headers[i])
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        _set_run(p, txt, bold=True, size=11)
-        _shade_cell(headers[i], "D9E1F2")
-        _set_cell_borders(headers[i])
+    # CRITERIOS
+    criterios_lines = [
+        f"SER: {_criterio_to_text(criterios.get('SER'))}",
+        f"SABER: {_criterio_to_text(criterios.get('SABER'))}",
+        f"HACER: {_criterio_to_text(criterios.get('HACER'))}",
+        f"DECIDIR: {_criterio_to_text(criterios.get('DECIDIR'))}",
+    ]
 
-    # Prepara las celdas del cuerpo de la tabla aplicando bordes individuales.
-    body = main.rows[1].cells
-    for c in body:
-        _set_cell_borders(c)
+    _write_multiline_cell(
+        t2.cell(1, 5),
+        criterios_lines,
+        size=10,
+    )
 
-    # Renderiza en la primera columna los cuatro bloques metodológicos del PDC:
-    # práctica, teoría, valoración y producción.
-    col0 = body[0]
-    _clear_cell(col0)
-
-    for label_key, human in [
-        ("practica", "PRÁCTICA"),
-        ("teoria", "TEORÍA"),
-        ("valoracion", "VALORACIÓN"),
-        ("produccion", "PRODUCCIÓN"),
-    ]:
-        ph = col0.add_paragraph()
-        _set_run(ph, human, bold=True, size=11)
-        items = (generado or {}).get(label_key, [])
-        _add_checklist(col0, items)
-        col0.add_paragraph("")  # separador
-
-    # Muestra los recursos o materiales y criterios educativos propuestos dentro del documento.
-    col1 = body[1]
-    _clear_cell(col1)
-    recursos = (generado or {}).get("recursos", [])
-    _add_checklist(col1, recursos)
-
-    col2 = body[2]
-    _clear_cell(col2)
-    criterios = (generado or {}).get("criterios", {}) or {}
-
-    # Helper local para recuperar criterios por dimensión aceptando distintas
-    # variantes de nombres de clave dentro del JSON generado.
-    def _pick_crit(key: str) -> List[str]:
-        if not isinstance(criterios, dict):
-            return []
-        v = criterios.get(key) or criterios.get(key.capitalize()) or criterios.get(key.lower())
-        if v is None:
-            return []
-        if isinstance(v, list):
-            return _as_list(v)
-        if isinstance(v, str):
-            return _split_sentences(v)
-        return [str(v)]
-
-    # Renderiza los criterios de evaluación agrupados por las cuatro dimensiones pedagógicas.
-    for kk in ["SER", "SABER", "HACER", "DECIDIR"]:
-        ph = col2.add_paragraph()
-        _set_run(ph, kk, bold=True, size=11)
-        _add_checklist(col2, _pick_crit(kk))
-        col2.add_paragraph("")
-
-    # PRODUCTO + BIBLIO + FIRMA
-    # Si existe producto final, lo muestra en una sección independiente con borde.
-    doc.add_paragraph("")
-    prod = (generado or {}).get("producto", "")
-    if prod:
-        _boxed_section(doc, "Productos", prod, bullets=True)
-
-    # Agrega la sección de bibliografía al final del documento.
-    doc.add_paragraph("")
-    b = doc.add_paragraph()
-    _set_run(b, "Bibliografía", bold=True, size=12)
-
-    # Inserta una bibliografía base genérica como apoyo documental del PDC.
-    for it in [
-        "Planes y Programas del Ministerio de Educación.",
-        "Texto de aprendizajes del Ministerio.",
-        "Fuentes comunitarias pertinentes.",
-    ]:
-        p = doc.add_paragraph("✓ " + it)
-        p.paragraph_format.space_after = Pt(0)
-
-    # Agrega un espacio de firma con el nombre del docente al final del documento.
-    doc.add_paragraph("")
-    firma = doc.add_paragraph()
-    firma.add_run("______________________________\n")
-    firma.add_run(str(ident.get("docente", "") or ""))
-
-    buffer = BytesIO()
-    doc.save(buffer)
-    buffer.seek(0)
-    return buffer
+    buf = BytesIO()
+    doc.save(buf)
+    buf.seek(0)
+    return buf
