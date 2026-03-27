@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     RED2_R2_PREFIX: str = "models/red2"
     RED3_R2_PREFIX: str = "models/red3"
 
-    demo_red3: bool = False
+    demo_red3: bool = True
 
 
     model_config = {
