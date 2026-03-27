@@ -34,6 +34,7 @@ from app.infrastructure.persistence.supabase.busqueda_semantica_rpc import Busqu
 from app.infrastructure.persistence.supabase.espacios_repo import EspaciosRepo
 from app.infrastructure.persistence.supabase.chat_espacios_repo import ChatEspaciosRepo
 from app.infrastructure.persistence.supabase.embeddings_repo import EmbeddingsRepo
+from app.infrastructure.persistence.supabase.espacio_archivos_repo import EspacioArchivosRepo
 
 # Infraestructura - Persistencia - Repositorios RED
 from app.infrastructure.persistence.supabase.red1_repo import Red1RepoPostgrest
@@ -53,6 +54,8 @@ from app.application.use_cases.enviar_mensaje_espacio_plus import EnviarMensajeE
 from app.application.use_cases.ingestar_archivo_espacio import IngestarArchivoEspacioUseCase
 from app.application.use_cases.listar_chats_espacio import ListarChatsEspacioUseCase
 from app.application.use_cases.obtener_chat_espacio import ObtenerChatEspacioUseCase
+from app.application.use_cases.listar_archivos_espacio import ListarArchivosEspacioUseCase
+from app.application.use_cases.eliminar_archivo_espacio import EliminarArchivoEspacioUseCase
 
 # Dependencias externas de otros módulos de dependencias
 from app.interfaces.api.dependencies.red3_deps import get_red3_service
@@ -193,6 +196,15 @@ def get_embeddings_repo():
         client=get_supabase_http(),
     )
 
+# Crea una instancia del repositorio maestro de archivos de espacios con pool HTTP.
+def get_espacio_archivos_repo():
+    return _construct_maybe_with_client(
+        EspacioArchivosRepo,
+        settings.SUPABASE_URL,
+        settings.SUPABASE_ANON_KEY,
+        client=get_supabase_http(),
+    )
+
 # Crea una instancia del repositorio RED2 con pool HTTP
 def get_red2_repo():
     return _construct_maybe_with_client(
@@ -255,7 +267,24 @@ def get_ingestar_archivo_espacio_uc():
         red1_service=get_red1_service(),
         red2_model=_red2_model,
         red2_repo=get_red2_repo(),
-        red3_service=get_red3_service(),  
+        red3_service=get_red3_service(),
+        espacio_archivos_repo=get_espacio_archivos_repo(),
+    )
+
+# Crea el caso de uso para listar archivos visibles de un espacio.
+def get_listar_archivos_espacio_uc():
+    return ListarArchivosEspacioUseCase(
+        get_auth_client(),
+        get_espacios_repo(),
+        get_espacio_archivos_repo(),
+    )
+
+# Crea el caso de uso para eliminar un archivo del espacio y todo su procesamiento asociado.
+def get_eliminar_archivo_espacio_uc():
+    return EliminarArchivoEspacioUseCase(
+        get_auth_client(),
+        get_espacios_repo(),
+        get_espacio_archivos_repo(),
     )
 
 

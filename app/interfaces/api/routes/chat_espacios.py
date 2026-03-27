@@ -29,6 +29,8 @@ from app.interfaces.api.dependencies.chat_espacio_deps import (
     get_listar_chats_espacio_uc,
     get_historial_chat_espacio_uc,
     get_ingestar_archivo_espacio_uc,
+    get_listar_archivos_espacio_uc,
+    get_eliminar_archivo_espacio_uc,
 )
 
 # Creación del router para rutas de espacios con prefijo /espacios y etiqueta chat-espacios.
@@ -113,3 +115,27 @@ async def subir_archivo_espacio(
 ):
     token = extract_bearer_token(authorization)
     return await uc.execute(token, espacio_id, file)
+
+# Endpoint GET para listar archivos del espacio.
+@router.get("/{espacio_id}/archivos")
+async def listar_archivos_espacio(
+    espacio_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    uc=Depends(get_listar_archivos_espacio_uc),
+):
+    token = extract_bearer_token(authorization)
+    return await uc.execute(token, espacio_id)
+
+# Endpoint DELETE para eliminar un archivo del espacio y todo el procesamiento asociado.
+@router.delete("/{espacio_id}/archivos/{file_id}")
+async def eliminar_archivo_espacio(
+    espacio_id: str,
+    file_id: str,
+    authorization: str | None = Header(default=None, alias="Authorization"),
+    uc=Depends(get_eliminar_archivo_espacio_uc),
+):
+    token = extract_bearer_token(authorization)
+    result = await uc.execute(token, espacio_id, file_id)
+    if not result.get("ok"):
+        raise HTTPException(status_code=404, detail=result.get("detail", "No se pudo eliminar el archivo"))
+    return result

@@ -15,6 +15,16 @@ import hashlib
 import uuid
 import time
 
+# Límites de ingesta: solo se rechaza duro por tamaño bruto, formato inválido
+# o falta de texto extraíble. Lo demás se recorta para rescatar el máximo útil.
+ALLOWED_EXTENSIONS = (".pdf", ".docx")
+MAX_FILE_BYTES = 8 * 1024 * 1024          # 8 MB máximo por archivo (rechazo duro)
+MIN_TEXT_CHARS = 500                      # mínimo de texto útil extraído
+MAX_TEXT_CHARS = 600_000                  # tope blando de texto procesable
+MAX_PDF_PAGES = 120                       # tope blando de páginas PDF a leer
+MAX_CHUNKS = 180                          # tope blando de chunks a procesar
+
+
 class IngestarArchivoEspacioUseCase:
     def __init__(
         self,
@@ -26,6 +36,7 @@ class IngestarArchivoEspacioUseCase:
         red2_model=None,
         red2_repo=None,
         red3_service=None,  
+        espacio_archivos_repo=None,
     ):
         self.auth = auth_client
         self.espacios_repo = espacios_repo
@@ -35,6 +46,7 @@ class IngestarArchivoEspacioUseCase:
         self.red2_model = red2_model
         self.red2_repo = red2_repo
         self.red3_service = red3_service  
+        self.espacio_archivos_repo = espacio_archivos_repo
 
     async def execute(self, access_token: str, espacio_id: str, file: UploadFile, file_id: str | None = None) -> dict:
         # Primero se identifica al docente autenticado y se valida que el espacio exista
@@ -54,38 +66,128 @@ class IngestarArchivoEspacioUseCase:
         data = await file.read()
         if not data or len(data) < 10:
             return {"ok": False, "detail": "Archivo vacío o inválido"}
+        
+        # Identificador lógico del archivo y huella para relacionar su procesamiento.
+        file_id = file_id or str(uuid.uuid4())
+        file_hash = hashlib.sha1(data).hexdigest()
+
+        # Crea el registro maestro del archivo antes del procesamiento para poder listarlo luego.
+        if self.espacio_archivos_repo:
+            try:
+                await self.espacio_archivos_repo.crear(
+                    access_token,
+                    {
+                        "id": file_id,
+                        "docente_id": docente_id,
+                        "espacio_id": espacio_id,
+                        "filename_original": filename,
+                        "mime_type": content_type or None,
+                        "size_bytes": len(data),
+                        "file_hash": file_hash,
+                        "total_chunks": 0,
+                        "estado": "processing",
+                        "error_detail": None,
+                    },
+                )
+            except Exception:
+                # No se rompe la ingesta principal por una falla aislada en el registro maestro.
+                pass
+        
+        # Se limita el tamaño bruto para evitar cargas excesivas en memoria y procesamiento.
+        if len(data) > MAX_FILE_BYTES:
+            if self.espacio_archivos_repo:
+                try:
+                    await self.espacio_archivos_repo.actualizar(
+                        access_token,
+                        file_id,
+                        {
+                            "estado": "failed",
+                            "error_detail": "El archivo supera el tamaño máximo permitido de 8 MB.",
+                        },
+                    )
+                except Exception:
+                    pass
+
+            return {
+                "ok": False,
+                "detail": "El archivo supera el tamaño máximo permitido de 8 MB."
+            }
 
         # Aquí se detecta el tipo de archivo y se aplica la estrategia de extracción de
         # texto correspondiente. Si no es PDF ni DOCX, se intenta tratar como texto plano.
+        # Se restringe la ingesta únicamente a PDF y DOCX para evitar formatos no controlados.
         text = ""
-        is_pdf  = ("pdf" in content_type) or filename.lower().endswith(".pdf")
+        lowered_name = filename.lower()
+
+        is_pdf = ("pdf" in content_type) or lowered_name.endswith(".pdf")
         is_docx = (
             ("word" in content_type)
             or ("officedocument.wordprocessingml.document" in content_type)
-            or filename.lower().endswith(".docx")
+            or lowered_name.endswith(".docx")
         )
+
+        if not (is_pdf or is_docx):
+            if self.espacio_archivos_repo:
+                try:
+                    await self.espacio_archivos_repo.actualizar(
+                        access_token,
+                        file_id,
+                        {
+                            "estado": "failed",
+                            "error_detail": "Formato no permitido. Solo se admiten archivos PDF y DOCX.",
+                        },
+                    )
+                except Exception:
+                    pass
+
+            return {
+                "ok": False,
+                "detail": "Formato no permitido. Solo se admiten archivos PDF y DOCX."
+            }
+
         if is_pdf:
-            text = self._extract_text_pdf_bytes(data)
+            # Si el PDF tiene muchas páginas, no se rechaza: se procesa hasta el límite blando.
+            pdf_pages = self._count_pdf_pages_bytes(data)
+            text = self._extract_text_pdf_bytes(data, max_pages=MAX_PDF_PAGES)
+
         elif is_docx:
             text = self._extract_text_docx_bytes(data)
-        else:
-            # fallback: texto plano
-            try:
-                text = data.decode("utf-8", errors="ignore")
-            except Exception:
-                text = ""
 
-        # El texto extraído se limpia y se recorta si es demasiado grande para evitar
-        # que la ingesta se vuelva innecesariamente pesada o inestable.
+        # Solo se rechaza si no hay texto útil real; si hay demasiado, se recorta.
         text = self._clean_text(text)
-        MAX_TEXT_LEN = 300_000
-        if len(text) > MAX_TEXT_LEN:
-            text = text[:MAX_TEXT_LEN]
 
-        # Si el texto final es válido, se divide en chunks solapados para poder generar
-        # embeddings y análisis por fragmentos en lugar de trabajar con un bloque gigante.
-        if not text or len(text) < 20:
-            return {"ok": False, "detail": "No se pudo extraer texto del archivo"}
+        if not text or len(text) < MIN_TEXT_CHARS:
+            if self.espacio_archivos_repo:
+                try:
+                    await self.espacio_archivos_repo.actualizar(
+                        access_token,
+                        file_id,
+                        {
+                            "estado": "failed",
+                            "error_detail": (
+                                "No se detectó suficiente texto utilizable en el archivo. "
+                                "Sube un PDF o DOCX con contenido textual real, no escaneado ni basado principalmente en imágenes."
+                            )[:1000],
+                        },
+                    )
+                except Exception:
+                    pass
+
+            return {
+                "ok": False,
+                "detail": (
+                    "No se detectó suficiente texto utilizable en el archivo. "
+                    "Sube un PDF o DOCX con contenido textual real, no escaneado ni basado principalmente en imágenes."
+                ),
+            }
+
+        if len(text) > MAX_TEXT_CHARS:
+            print(
+                f"[INGESTA] texto recortado: original={len(text)} "
+                f"limite={MAX_TEXT_CHARS} archivo={filename}"
+            )
+            text = text[:MAX_TEXT_CHARS]
+        
         
         t0 = time.time()
         print(f"[INGESTA] archivo={filename} ctype={content_type} bytes={len(data)} text_len={len(text)}")
@@ -93,14 +195,35 @@ class IngestarArchivoEspacioUseCase:
         chunks = self._chunk_text(text, max_chars=900, overlap=120)
         print(f"[INGESTA] chunks={len(chunks)} chunking_s={time.time()-t0:.2f}")
 
+
         if not chunks:
+            if self.espacio_archivos_repo:
+                try:
+                    await self.espacio_archivos_repo.actualizar(
+                        access_token,
+                        file_id,
+                        {
+                            "estado": "failed",
+                            "error_detail": "No se generaron chunks",
+                        },
+                    )
+                except Exception:
+                    pass
+
             return {"ok": False, "detail": "No se generaron chunks"}
+
+        # Si genera demasiados chunks, no se rechaza: se procesa solo el máximo permitido.
+        if len(chunks) > MAX_CHUNKS:
+            original_chunks = len(chunks)
+            chunks = chunks[:MAX_CHUNKS]
+            print(
+                f"[INGESTA] chunks recortados: original={original_chunks} "
+                f"limite={MAX_CHUNKS} archivo={filename}"
+            )
         
         
         # Se preparan identificadores y parámetros de procesamiento por lotes para hacer
         # la inserción de embeddings y etiquetas de forma más eficiente.
-        file_id = file_id or str(uuid.uuid4())
-        file_hash = hashlib.sha1(data).hexdigest()
         inserted = 0
         t_loop = time.time()
         print(f"[INGESTA] start_insert chunks={len(chunks)}")
@@ -293,6 +416,22 @@ class IngestarArchivoEspacioUseCase:
                 pass
 
         print(f"[INGESTA] done inserted={inserted} total_s={time.time()-t0:.1f}")
+
+        # Si el archivo terminó de procesarse correctamente, se actualiza su registro maestro.
+        if self.espacio_archivos_repo:
+            try:
+                await self.espacio_archivos_repo.actualizar(
+                    access_token,
+                    file_id,
+                    {
+                        "estado": "processed",
+                        "total_chunks": inserted,
+                        "error_detail": None,
+                    },
+                )
+            except Exception:
+                pass
+
         return {
             "ok": True,
             "espacio_id": espacio_id,
@@ -361,16 +500,32 @@ class IngestarArchivoEspacioUseCase:
         return [c for c in chunks if len(c) >= 30]
 
 
-    # Extrae texto plano desde un PDF cargado en memoria usando pypdf. Si falla,
-    # devuelve una cadena vacía para no romper el flujo de ingesta.
-    def _extract_text_pdf_bytes(self, data: bytes) -> str:
+    # Cuenta páginas de un PDF para frenar documentos demasiado extensos antes de procesarlos.
+    def _count_pdf_pages_bytes(self, data: bytes) -> int:
+        try:
+            from pypdf import PdfReader
+            import io
+            reader = PdfReader(io.BytesIO(data))
+            return len(reader.pages)
+        except Exception:
+            return 0
+
+    # Extrae texto plano desde un PDF cargado en memoria usando pypdf.
+    # Si el documento tiene muchas páginas, solo procesa hasta el límite configurado.
+    def _extract_text_pdf_bytes(self, data: bytes, max_pages: int | None = None) -> str:
         try:
             from pypdf import PdfReader
             import io
             reader = PdfReader(io.BytesIO(data))
             parts = []
-            for page in reader.pages:
+
+            pages = reader.pages
+            if isinstance(max_pages, int) and max_pages > 0:
+                pages = reader.pages[:max_pages]
+
+            for page in pages:
                 parts.append(page.extract_text() or "")
+
             return "\n".join(parts)
         except Exception:
             return ""
