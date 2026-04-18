@@ -1,3 +1,5 @@
+# app/application/use_cases/auth_login.py
+
 # Este use case forma parte del flujo de autenticación y se encarga de iniciar sesión
 # a un usuario usando email y contraseña. Su única responsabilidad es recibir esas
 # credenciales y delegar la operación al cliente de autenticación.

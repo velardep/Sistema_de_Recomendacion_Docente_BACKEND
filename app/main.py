@@ -1,4 +1,6 @@
-﻿from fastapi import FastAPI
+﻿# app/main.py
+
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.infrastructure.ai.ensure_models import ensure_models_downloaded

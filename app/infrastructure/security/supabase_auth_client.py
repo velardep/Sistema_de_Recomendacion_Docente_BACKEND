@@ -1,3 +1,7 @@
+# app/infrastructure/security/supabase_auth_client.py
+
+# este archivo define el cliente de autenticación para Supabase, que se encarga de manejar el registro, inicio de sesión y obtención de información del usuario autenticado. Este cliente se comunica directamente con los endpoints de autenticación de Supabase y maneja los tokens de acceso necesarios para las operaciones protegidas.
+
 from typing import Optional
 
 import httpx

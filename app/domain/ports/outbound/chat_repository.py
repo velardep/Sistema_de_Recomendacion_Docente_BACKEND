@@ -1,3 +1,6 @@
+# app/domain/ports/outbound/chat_repository.py
+
+# este archivo define la interfaz del repositorio de chat, que es un contrato que cualquier implementación concreta debe cumplir. Esto permite desacoplar la lógica de negocio de los detalles de persistencia y facilita el testing y la mantenibilidad del código.
 from typing import Protocol, List, Dict, Optional
 
 class ChatRepository(Protocol):

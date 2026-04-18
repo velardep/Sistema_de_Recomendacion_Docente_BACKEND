@@ -2,6 +2,9 @@
 # INGESTA DE PRONTUARIOS Y ARCHIVOS GENERALES PARA NUTRIR AL SISTEMA DE RAG (retrieval-augmented generation) DE SOPORTE DOCENTE
 # Este script lee un PDF, lo divide en chunks, genera embeddings y los sube a la tabla embeddings_texto vinculados a un tema_curricular específico (nivel=GLOBAL_PDF, area=PRONTUARIO).
 # Luego, el sistema de RAG puede usar estos embeddings para responder preguntas sobre el prontuario
+
+# COMANDO
+# insertar prontuarios ingest_prontuario: python scripts/ingest_prontuario_pdf.py data/Prontuario_Primaria_Comunitaria.pdf
 import sys
 import os
 import argparse
